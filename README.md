@@ -147,3 +147,17 @@ Add these under **Settings → Secrets and variables → Actions**:
 | `CLOUDFLARE_ACCOUNT_ID` | target Cloudflare account id |
 
 No secrets or resource ids to provision; `PROXY_ORIGIN` is a public `[vars]` value in `wrangler.toml`.
+
+### Cloudflare API token permissions
+
+The `CLOUDFLARE_API_TOKEN` repo secret is an **Account**-scoped custom token
+(Cloudflare dashboard → My Profile → API Tokens → Create Custom Token) with
+these permissions:
+
+- **Workers Scripts** — Edit
+- **Account Settings** — Read
+
+Set **Account Resources → Include → (your account)**. No Zone permissions are
+needed — this repo deploys to a `*.workers.dev` host, not a custom domain. A
+single token can be shared across all `zfb-example-*` repos if it carries the
+union of every repo's permissions.
