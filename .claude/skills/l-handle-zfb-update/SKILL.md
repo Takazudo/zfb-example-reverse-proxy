@@ -2,13 +2,13 @@
 name: l-handle-zfb-update
 description: >-
   Update the zfb upstream dependency (the @takazudo/zfb* packages) in this
-  example (reverse-proxy) to the latest "next" dist-tag, review what changed
+  example (reverse-proxy) to the latest stable release, review what changed
   upstream between versions, and adapt this project's code if a change touches a
   surface it uses. Use when: (1) User says 'update zfb', 'bump zfb', 'zfb
-  update', or 'handle zfb update', (2) A new zfb next release is out and this
+  update', or 'handle zfb update', (2) A new zfb release is out and this
   example should track it.
 user-invocable: true
-argument-hint: "[target-version, e.g. 0.1.0-next.80 — omit to use latest next]"
+argument-hint: "[target-version, e.g. 2.3.0 — omit to use latest stable]"
 ---
 
 # Handle zfb Update — reverse-proxy
@@ -18,8 +18,8 @@ Assets: requests under `/proxy/...` are forwarded to `PROXY_ORIGIN` (a `[vars]`
 entry in `wrangler.toml`), streaming method, path, query, and body upstream while
 stripping hop-by-hop and cookie/security headers.
 
-Bump every `@takazudo/*` package this repo depends on to the latest `next`
-prerelease (kept in lockstep on one version), review what changed upstream, and
+Bump every `@takazudo/*` package this repo depends on to the latest stable
+release (kept in lockstep on one version), review what changed upstream, and
 adapt this project only where an upstream change touches a surface it actually
 uses.
 
@@ -35,12 +35,15 @@ neither). If either is dirty, stop and ask before touching them.
 
 ```bash
 CURRENT=$(node -p "require('./package.json').dependencies['@takazudo/zfb']")
-TARGET=${1:-$(npm view @takazudo/zfb dist-tags.next)}
+TARGET=${1:-$(npm view @takazudo/zfb dist-tags.latest)}
 ```
 
-- Always resolve the target from the `next` dist-tag, never `latest` — this repo
-  tracks the zfb prerelease line.
-- If `CURRENT` == `TARGET`: report "already at the latest next (<version>)" and STOP.
+- Always resolve the target from the `latest` dist-tag, never `next` — this repo
+  tracks the zfb stable line. The `next` prerelease line ENDED at `1.1.0-next.1`,
+  a prerelease of `1.1.0`, which has since been released and superseded; the
+  `next` dist-tag still points there, so resolving from it silently pins a dead
+  prerelease of an already-shipped version.
+- If `CURRENT` == `TARGET`: report "already at the latest stable (<version>)" and STOP.
 - If an explicit target is older than `CURRENT`, that is a downgrade — stop and
   confirm first.
 
