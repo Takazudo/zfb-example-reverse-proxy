@@ -203,7 +203,11 @@ genuinely broken:
 | --- | --- |
 | exit 0 + `::notice::` | The domain does not resolve yet, or its certificate is still provisioning. Not wired up — nothing is broken. |
 | exit 0 + `::warning::` | `httpbingo.org` is down, rate-limiting, or unreachable. A 502 `Upstream fetch failed` from our own Worker lands here too — it proves the Worker *is* running on the domain; only the upstream leg failed. |
-| exit 1 + `::error::` | Genuinely broken: the asset layer answered `/proxy/` instead of the Worker, `PROXY_ORIGIN` is missing from the deployment, the wrong site is on the domain, or the proxy returned a body that did not come from the upstream. |
+| exit 1 + `::error::` | Genuinely broken: the asset layer answered `/proxy/` instead of the Worker, `PROXY_ORIGIN` is missing from the deployment, the wrong site is on the domain, or the proxy returned a body that did not come from the upstream. Also any *unrecognised* network or TLS error — notably an expired certificate, which a live domain can only reach by breaking — and a malformed base URL. |
+
+Only errors explicitly recognised as "not provisioned yet" or "transient" are
+allowed to exit 0; anything unrecognised fails, so a new failure mode can never
+silently produce a green run.
 
 The upstream is a third-party service, so requests get a bounded retry (3
 attempts with backoff) before any verdict is reached.

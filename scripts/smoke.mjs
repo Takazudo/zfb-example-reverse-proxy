@@ -60,7 +60,11 @@ const RETRY_BACKOFF_MS = [2_000, 5_000];
  * Network-level failures that mean "the custom domain is not live yet" rather
  * than "the site is broken". The TLS entries matter because Cloudflare issues
  * the edge certificate asynchronously after a custom domain is attached, so a
- * cert error in the minutes after the attach is a pending state, not a fault.
+ * cert that does not yet cover this host is a pending state, not a fault.
+ *
+ * CERT_HAS_EXPIRED is deliberately NOT in this set: a newly issued certificate
+ * is never expired, so an expiry can only mean an already-provisioned domain
+ * broke. That must go red rather than be excused as pending setup.
  */
 const NOT_PROVISIONED_ERROR_CODES = new Set([
   "ENOTFOUND",
@@ -69,7 +73,6 @@ const NOT_PROVISIONED_ERROR_CODES = new Set([
   "ERR_TLS_CERT_ALTNAME_INVALID",
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
   "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "CERT_HAS_EXPIRED",
 ]);
 
 /** Transient connection failures worth another attempt before judging. */
@@ -95,6 +98,18 @@ const NOT_PROVISIONED_STATUSES = new Set([530]);
 
 const baseUrl = (process.argv[2] ?? process.env.SMOKE_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
+// Validated up front so a mistyped target fails loudly instead of falling into
+// the network-error path, where it could be mistaken for "not deployed yet".
+try {
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`unsupported protocol "${parsed.protocol}"`);
+  }
+} catch (err) {
+  console.log(`::error::Invalid smoke-test base URL ${JSON.stringify(baseUrl)}: ${err.message}`);
+  process.exit(1);
+}
+
 const notice = (message) => console.log(`::notice::${message}`);
 const warning = (message) => console.log(`::warning::${message}`);
 const error = (message) => console.log(`::error::${message}`);
@@ -106,6 +121,37 @@ function errorCode(err) {
 
 function describeError(err) {
   return `${errorCode(err)}: ${err?.cause?.message ?? err?.message ?? String(err)}`;
+}
+
+/**
+ * Sort a network-level failure into one of the three buckets.
+ *
+ * Anything not explicitly recognised as "not provisioned yet" or "transient"
+ * is a HARD FAILURE. That default matters: an unrecognised error must never be
+ * able to produce a green run, which is what would let an expired certificate
+ * or a broken TLS handshake pass as "not deployed yet".
+ */
+function classifyNetworkError(err, url) {
+  const code = errorCode(err);
+
+  if (NOT_PROVISIONED_ERROR_CODES.has(code)) {
+    notice(
+      `${baseUrl} is not reachable yet (${code}) — the custom domain is not attached, or its ` +
+        `certificate is still provisioning. Skipping the smoke test.`,
+    );
+    return "skip";
+  }
+
+  if (RETRYABLE_ERROR_CODES.has(code)) {
+    warning(
+      `Could not reach ${url} after ${MAX_ATTEMPTS} attempts (${describeError(err)}) — treating as a ` +
+        `transient network fault rather than a deployment failure.`,
+    );
+    return "skip";
+  }
+
+  error(`Request to ${url} failed: ${describeError(err)}`);
+  return "fail";
 }
 
 async function attemptFetch(url) {
@@ -150,17 +196,7 @@ async function checkHomePage() {
   console.log(`GET ${url}`);
   const { response, err } = await fetchWithRetry(url);
 
-  if (err) {
-    if (NOT_PROVISIONED_ERROR_CODES.has(errorCode(err))) {
-      notice(
-        `${baseUrl} is not reachable yet (${errorCode(err)}) — the custom domain is not attached, ` +
-          `or its certificate is still provisioning. Skipping the smoke test.`,
-      );
-      return "skip";
-    }
-    warning(`Could not reach ${url} after ${MAX_ATTEMPTS} attempts (${describeError(err)}). Skipping.`);
-    return "skip";
-  }
+  if (err) return classifyNetworkError(err, url);
 
   if (NOT_PROVISIONED_STATUSES.has(response.status)) {
     notice(
@@ -231,10 +267,7 @@ async function checkProxyPath() {
   console.log(`GET ${url}`);
   const { response, err } = await fetchWithRetry(url);
 
-  if (err) {
-    warning(`Could not reach ${url} after ${MAX_ATTEMPTS} attempts (${describeError(err)}). Skipping.`);
-    return "skip";
-  }
+  if (err) return classifyNetworkError(err, url);
 
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
