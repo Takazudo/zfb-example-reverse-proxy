@@ -124,11 +124,34 @@ Expected checks:
 
 ## Deploy
 
+Production is served on the custom domain declared in `wrangler.toml`:
+
+```
+https://zfb-example-reverse-proxy.takazudomodular.com
+```
+
+The Worker also keeps its `*.workers.dev` host
+(`zfb-example-reverse-proxy.takazudo.workers.dev`), because `wrangler.toml` sets
+`workers_dev = true` and `preview_urls = true` explicitly — `preview_urls`
+defaults to *match* `workers_dev`, so leaving it implicit would silently take
+per-deploy preview URLs down with any later `workers_dev = false`.
+
 No extra Cloudflare resources are required. After `pnpm build`, deploy with:
 
 ```sh
 pnpm exec wrangler deploy
 ```
+
+To validate `wrangler.toml` without credentials — including that the top-level
+keys are not accidentally scoped into `[assets]` — use:
+
+```sh
+pnpm exec wrangler deploy --dry-run
+```
+
+A misplaced key does not fail the command; it prints
+`Unexpected fields found in assets field` and is then silently ignored, so read
+the output rather than just the exit code.
 
 ## Continuous deployment (GitHub Actions)
 
@@ -141,26 +164,71 @@ This repo ships `.github/workflows/deploy.yml`:
   `pnpm build`. It needs no Cloudflare credentials, so CI is green immediately.
 - **deploy** runs on push to `main` and calls `wrangler deploy`. It self-skips
   until the secrets below are set, so a fresh repo never shows a red deploy.
+- **smoke test** runs after a successful deploy — `pnpm smoke`, which is
+  `scripts/smoke.mjs`. See below.
 
 Add these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token with Account · Workers Scripts: Edit |
+| `CLOUDFLARE_API_TOKEN` | API token with Account · Workers Scripts: Edit **and** Zone · Workers Routes: Edit |
 | `CLOUDFLARE_ACCOUNT_ID` | target Cloudflare account id |
 
 No secrets or resource ids to provision; `PROXY_ORIGIN` is a public `[vars]` value in `wrangler.toml`.
 
+### Post-deploy smoke test
+
+`wrangler deploy` exiting 0 says the Worker uploaded — it says nothing about
+whether the custom domain actually routes to it. `scripts/smoke.mjs` is the
+check that confirms it, and it asserts two things against the live host:
+
+1. `GET /` returns 200 HTML containing this site's content marker.
+2. `GET /proxy/anything/reverse-proxy?via=zfb` returns JSON that demonstrably
+   came from `httpbingo.org` — the echoed `method`, `args.via`, and upstream
+   `url`. This is the load-bearing assertion: the static asset layer could
+   never produce that body, so it proves the Worker itself ran on the domain.
+
+Run it by hand against any host:
+
+```sh
+pnpm smoke                                    # the live custom domain
+pnpm smoke http://127.0.0.1:8788              # a local `wrangler dev`
+SMOKE_BASE_URL=https://... pnpm smoke
+```
+
+It sorts failures into three buckets so that CI only goes red when this repo is
+genuinely broken:
+
+| Outcome | Meaning |
+| --- | --- |
+| exit 0 + `::notice::` | The domain does not resolve yet, or its certificate is still provisioning. Not wired up — nothing is broken. |
+| exit 0 + `::warning::` | `httpbingo.org` is down, rate-limiting, or unreachable. A 502 `Upstream fetch failed` from our own Worker lands here too — it proves the Worker *is* running on the domain; only the upstream leg failed. |
+| exit 1 + `::error::` | Genuinely broken: the asset layer answered `/proxy/` instead of the Worker, `PROXY_ORIGIN` is missing from the deployment, the wrong site is on the domain, or the proxy returned a body that did not come from the upstream. Also any *unrecognised* network or TLS error — notably an expired certificate, which a live domain can only reach by breaking — and a malformed base URL. |
+
+Only errors explicitly recognised as "not provisioned yet" or "transient" are
+allowed to exit 0; anything unrecognised fails, so a new failure mode can never
+silently produce a green run.
+
+The upstream is a third-party service, so requests get a bounded retry (3
+attempts with backoff) before any verdict is reached.
+
 ### Cloudflare API token permissions
 
-The `CLOUDFLARE_API_TOKEN` repo secret is an **Account**-scoped custom token
-(Cloudflare dashboard → My Profile → API Tokens → Create Custom Token) with
-these permissions:
+The `CLOUDFLARE_API_TOKEN` repo secret is a custom token (Cloudflare dashboard →
+My Profile → API Tokens → Create Custom Token) with these permissions:
 
-- **Workers Scripts** — Edit
-- **Account Settings** — Read
+| Type | Resource | Level |
+| --- | --- | --- |
+| Account | Workers Scripts | Edit |
+| Account | Account Settings | Read |
+| Zone | Workers Routes | Edit |
 
-Set **Account Resources → Include → (your account)**. No Zone permissions are
-needed — this repo deploys to a `*.workers.dev` host, not a custom domain. A
-single token can be shared across all `zfb-example-*` repos if it carries the
-union of every repo's permissions.
+Set **Account Resources → Include → (your account)** and **Zone Resources →
+Include → takazudomodular.com**.
+
+**Zone · Workers Routes · Edit is required** because this repo serves production
+on a custom domain (the `[[routes]]` block in `wrangler.toml`). Without it,
+`wrangler deploy` still uploads the Worker successfully and then fails on the
+route-creation step — so the deploy job goes red while the Worker itself is
+fine. A single token can be shared across all `zfb-example-*` repos if it
+carries the union of every repo's permissions.
