@@ -194,6 +194,7 @@ Run it by hand against any host:
 pnpm smoke                                    # the live custom domain
 pnpm smoke http://127.0.0.1:8788              # a local `wrangler dev`
 SMOKE_BASE_URL=https://... pnpm smoke
+SMOKE_REQUIRE_LIVE=1 pnpm smoke               # no "not live yet" excuses
 ```
 
 It sorts failures into three buckets so that CI only goes red when this repo is
@@ -201,7 +202,7 @@ genuinely broken:
 
 | Outcome | Meaning |
 | --- | --- |
-| exit 0 + `::notice::` | The domain does not resolve yet, or its certificate is still provisioning. Not wired up — nothing is broken. |
+| exit 0 + `::notice::` | The domain does not resolve yet, resolves to Cloudflare with nothing bound, its certificate is still provisioning, or only its `AAAA` record has propagated. Not wired up — nothing is broken. |
 | exit 0 + `::warning::` | `httpbingo.org` is down, rate-limiting, or unreachable. A 502 `Upstream fetch failed` from our own Worker lands here too — it proves the Worker *is* running on the domain; only the upstream leg failed. |
 | exit 1 + `::error::` | Genuinely broken: the asset layer answered `/proxy/` instead of the Worker, `PROXY_ORIGIN` is missing from the deployment, the wrong site is on the domain, or the proxy returned a body that did not come from the upstream. Also any *unrecognised* network or TLS error — notably an expired certificate, which a live domain can only reach by breaking — and a malformed base URL. |
 
@@ -211,6 +212,39 @@ silently produce a green run.
 
 The upstream is a third-party service, so requests get a bounded retry (3
 attempts with backoff) before any verdict is reached.
+
+#### `SMOKE_REQUIRE_LIVE` — retiring the first bucket
+
+The first bucket is a grace period, and grace periods should end. Once the
+custom domain is attached and serving, "not reachable yet" stops being a
+plausible state and becomes the exact regression this script exists to catch,
+so the deploy workflow sets `SMOKE_REQUIRE_LIVE: "1"` on the smoke step: every
+row-one condition becomes exit 1 instead of a green skip.
+
+It deliberately does **not** touch the second bucket. `httpbingo.org` is
+somebody else's server; its outage is never evidence that this repo's deploy is
+broken, so an upstream failure still degrades to a `::warning::` with the flag
+set. A genuinely broken proxy — the Worker not running, the asset layer
+answering `/proxy/`, `PROXY_ORIGIN` missing — is unaffected and still fails.
+
+The skip path stays in the code so the script remains usable against a domain
+that is *not* yet live (a fresh fork, a new custom domain mid-attach). Leave the
+flag unset there.
+
+##### The IPv6 propagation window
+
+When `wrangler deploy` attaches a custom domain, Cloudflare publishes the
+`AAAA` record before the `A` record, and GitHub-hosted runners have no IPv6
+route. For those few minutes a runner resolves the host, gets only an IPv6
+address, and fails with `ENETUNREACH` — a working site that simply cannot be
+reached from that runner yet. Both `ENETUNREACH` and `EHOSTUNREACH` are
+therefore first-bucket conditions.
+
+`fetch` reports them awkwardly: with several candidate addresses, Happy Eyeballs
+wraps the per-address failures in an `AggregateError` that carries no `code` of
+its own, so reading `err.cause.code` yields `undefined` and the error would fall
+through to the unrecognised-error hard failure. The script walks the whole error
+graph — `cause` chains *and* `AggregateError.errors[]` — to find the real code.
 
 ### Cloudflare API token permissions
 

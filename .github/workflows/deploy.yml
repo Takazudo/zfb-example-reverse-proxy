@@ -7,8 +7,10 @@
 #              * secrets.CLOUDFLARE_API_TOKEN is unset, or
 #              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
 #            So the repo never shows a red deploy before Cloudflare is wired up.
-#            It then smoke-tests the live custom domain, which likewise self-skips
-#            until the domain resolves.
+#            It then smoke-tests the live custom domain with SMOKE_REQUIRE_LIVE=1:
+#            the domain is attached and serving, so failing to reach it is a
+#            regression, not pending setup. An httpbingo.org outage is still
+#            forgiven — a third party's downtime is not this deploy breaking.
 #
 # Enable deploys by adding, in repo Settings -> Secrets and variables -> Actions:
 #   CLOUDFLARE_API_TOKEN   token with Account · Workers Scripts: Edit
@@ -98,10 +100,14 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
       # Only `wrangler deploy` exiting 0 is not evidence the site is reachable on
-      # its custom domain — this step is. It self-skips (exit 0 + ::notice::) while
-      # the domain is not attached yet, and degrades an httpbingo.org outage to a
-      # ::warning::, so it only goes red when the proxy is genuinely broken.
+      # its custom domain — this step is. It still degrades an httpbingo.org
+      # outage to a ::warning:: (a third party's downtime is not our deploy
+      # breaking), but SMOKE_REQUIRE_LIVE retires the "not attached yet" excuse:
+      # the domain IS attached and serving, so a run that cannot reach it is a
+      # regression, not a pending setup, and must go red instead of skipping.
       # Deliberately NOT `if: always()` — smoking a failed deploy is meaningless.
       - name: Smoke test the live custom domain
         if: steps.preflight.outputs.ready == 'true'
+        env:
+          SMOKE_REQUIRE_LIVE: "1"
         run: pnpm smoke
