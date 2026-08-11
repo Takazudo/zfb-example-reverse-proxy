@@ -6,9 +6,10 @@ a live Worker at
 
 **Read the preflight notice before trusting a green run.** The `deploy` job in
 `.github/workflows/deploy.yml` self-skips whenever `CLOUDFLARE_API_TOKEN` is
-unset, so a green CI run does not by itself mean anything shipped — and the
-smoke test that follows self-skips too while the custom domain does not
-resolve. Everything below is the first-time path; follow it in order.
+unset, so a green CI run does not by itself mean anything shipped. The smoke
+test that follows no longer self-skips — it runs with `SMOKE_REQUIRE_LIVE: "1"`
+now that the domain is live — but it only runs at all once the deploy step did.
+Everything below is the first-time path; follow it in order.
 
 The README covers what the proxy *is* (route shape, header policy, local runs)
 and remains the reference for that. This document only covers getting it
@@ -144,13 +145,18 @@ https://zfb-example-reverse-proxy.takazudomodular.com
 The deploy job runs `pnpm smoke` (`scripts/smoke.mjs`) immediately after a
 successful deploy, which is the automated version of this section: it asserts
 the home page carries this site's content marker and that `/proxy/` returns a
-body that genuinely came from the upstream. It self-skips with a `::notice::`
-while the domain does not resolve yet, so check the run log for that notice
-before assuming the domain is live. You can run the same check locally:
+body that genuinely came from the upstream. Because this domain is live, the
+workflow sets `SMOKE_REQUIRE_LIVE: "1"` on that step, so a run that cannot reach
+the domain goes red instead of self-skipping with a `::notice::`. You can run
+the same check locally:
 
 ```sh
-pnpm smoke
+pnpm smoke                      # skips if the domain is not live yet
+SMOKE_REQUIRE_LIVE=1 pnpm smoke # what CI runs
 ```
+
+An `httpbingo.org` outage still degrades to a `::warning::` under the flag —
+see the README's smoke-test section for why those two tolerances are separate.
 
 To verify by hand, confirm the deploy step in the Actions run actually ran
 rather than emitting a skip notice, then exercise the proxy. These are the

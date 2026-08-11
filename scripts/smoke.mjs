@@ -38,9 +38,17 @@
  *                         serving the wrong content, or the proxy returned 200
  *                         with a body that did not come from the upstream.
  *
+ * SMOKE_REQUIRE_LIVE retires the FIRST bucket only. Once the custom domain is
+ * confirmed live, "not reachable yet" stops being a plausible state and starts
+ * being the exact regression this script exists to catch, so setting the flag
+ * turns every not-live-yet condition into exit 1. It deliberately does NOT
+ * touch the second bucket: httpbingo.org is a third party, and its outage is
+ * never evidence that this repo's deploy is broken, flag or no flag.
+ *
  * Usage:
  *   node scripts/smoke.mjs [base-url]
  *   SMOKE_BASE_URL=https://... node scripts/smoke.mjs
+ *   SMOKE_REQUIRE_LIVE=1 node scripts/smoke.mjs   # no excuses for a live domain
  */
 
 const DEFAULT_BASE_URL = "https://zfb-example-reverse-proxy.takazudomodular.com";
@@ -62,6 +70,12 @@ const RETRY_BACKOFF_MS = [2_000, 5_000];
  * the edge certificate asynchronously after a custom domain is attached, so a
  * cert that does not yet cover this host is a pending state, not a fault.
  *
+ * ENETUNREACH/EHOSTUNREACH cover the IPv6-only propagation window: when a
+ * custom domain is attached, Cloudflare publishes the AAAA record before the A
+ * record, and GitHub-hosted runners have no IPv6 route. For those few minutes
+ * the runner resolves the host, gets only an IPv6 address, and cannot route to
+ * it — indistinguishable from "not attached yet", and just as temporary.
+ *
  * CERT_HAS_EXPIRED is deliberately NOT in this set: a newly issued certificate
  * is never expired, so an expiry can only mean an already-provisioned domain
  * broke. That must go red rather than be excused as pending setup.
@@ -70,6 +84,8 @@ const NOT_PROVISIONED_ERROR_CODES = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
   "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
   "ERR_TLS_CERT_ALTNAME_INVALID",
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
   "DEPTH_ZERO_SELF_SIGNED_CERT",
@@ -98,6 +114,13 @@ const NOT_PROVISIONED_STATUSES = new Set([530]);
 
 const baseUrl = (process.argv[2] ?? process.env.SMOKE_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
+/**
+ * Set by CI, where the custom domain is known to be attached and serving. It
+ * asserts "this host is live" — so every not-live-yet excuse below becomes a
+ * hard failure instead of a green skip.
+ */
+const REQUIRE_LIVE = /^(1|true)$/i.test((process.env.SMOKE_REQUIRE_LIVE ?? "").trim());
+
 // Validated up front so a mistyped target fails loudly instead of falling into
 // the network-error path, where it could be mistaken for "not deployed yet".
 try {
@@ -115,13 +138,97 @@ const warning = (message) => console.log(`::warning::${message}`);
 const error = (message) => console.log(`::error::${message}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function errorCode(err) {
-  return err?.cause?.code ?? err?.code ?? err?.name ?? "UNKNOWN";
+/**
+ * Every identifying code reachable from `err`, in discovery order.
+ *
+ * `fetch` buries the real reason: the thrown TypeError carries the cause, and
+ * when Happy Eyeballs tries several addresses the cause is an AggregateError
+ * whose own `code` is undefined — the per-address failures live in `.errors[]`.
+ * A `.cause`-only walk therefore reports UNKNOWN for exactly the case this
+ * script most needs to recognise (ENETUNREACH from an IPv6-only DNS answer on
+ * an IPv4-only runner), and UNKNOWN is a hard failure. So walk the whole graph.
+ *
+ * `name` is collected too because AbortSignal.timeout rejects with a
+ * DOMException that has a name (TimeoutError) and no code.
+ */
+function errorCodes(err) {
+  const codes = [];
+  const names = [];
+  const seen = new Set();
+
+  const visit = (node) => {
+    if (node === null || typeof node !== "object" || seen.has(node)) return;
+    seen.add(node);
+    if (typeof node.code === "string") codes.push(node.code);
+    if (typeof node.name === "string") names.push(node.name);
+    if (Array.isArray(node.errors)) node.errors.forEach(visit);
+    visit(node.cause);
+  };
+
+  visit(err);
+  // `code` first: it is the specific reason, where `name` is usually just the
+  // constructor (TypeError, Error) and only carries meaning for TimeoutError.
+  return { codes, names, all: [...codes, ...names] };
+}
+
+const matchesAny = (err, codeSet) => errorCodes(err).all.some((code) => codeSet.has(code));
+
+/** The codes worth printing — constructor names only when nothing better exists. */
+function errorLabel(err) {
+  const { codes, names } = errorCodes(err);
+  const shown = codes.length > 0 ? codes : names;
+  return [...new Set(shown)].join("/") || "UNKNOWN";
 }
 
 function describeError(err) {
-  return `${errorCode(err)}: ${err?.cause?.message ?? err?.message ?? String(err)}`;
+  return `${errorLabel(err)}: ${err?.cause?.message ?? err?.message ?? String(err)}`;
 }
+
+/**
+ * Report a condition that is not this repo's fault and decide its exit code.
+ *
+ * `hardenedByRequireLive` is the whole separation of concerns. It is true for
+ * the "our custom domain is not answering" conditions — the ones that are only
+ * excusable while the domain is still being wired up, and that
+ * SMOKE_REQUIRE_LIVE exists to retire. It is false for upstream-outage
+ * conditions: httpbingo.org is a third party, so its downtime must keep
+ * degrading to a warning even under SMOKE_REQUIRE_LIVE, or a stranger's outage
+ * would permanently red this repo's CI.
+ */
+function tolerate(message, { annotate, hardenedByRequireLive, skipNote = "" }) {
+  if (hardenedByRequireLive && REQUIRE_LIVE) {
+    // `skipNote` is dropped here on purpose — it says why this is being
+    // forgiven, which is precisely what is no longer true.
+    error(`${message} SMOKE_REQUIRE_LIVE is set — ${baseUrl} is expected to be live, so this is a failure.`);
+    return "fail";
+  }
+  annotate(`${message}${skipNote}`);
+  return "skip";
+}
+
+/** The custom domain is not (yet) serving us. Excusable only before it is live. */
+const notLiveYet = (message) =>
+  tolerate(message, {
+    annotate: notice,
+    hardenedByRequireLive: true,
+    skipNote: " Skipping the smoke test.",
+  });
+
+/** We could not reach the domain at all. Same bucket: a live domain answers. */
+const unreachable = (message) =>
+  tolerate(message, {
+    annotate: warning,
+    hardenedByRequireLive: true,
+    skipNote: " Treating as a transient network fault rather than a deployment failure.",
+  });
+
+/** httpbingo.org is down or throttling us. Never our deploy's fault — never hardened. */
+const upstreamOutage = (message) =>
+  tolerate(message, {
+    annotate: warning,
+    hardenedByRequireLive: false,
+    skipNote: " Treating as an upstream outage, not a failure.",
+  });
 
 /**
  * Sort a network-level failure into one of the three buckets.
@@ -132,22 +239,15 @@ function describeError(err) {
  * or a broken TLS handshake pass as "not deployed yet".
  */
 function classifyNetworkError(err, url) {
-  const code = errorCode(err);
-
-  if (NOT_PROVISIONED_ERROR_CODES.has(code)) {
-    notice(
-      `${baseUrl} is not reachable yet (${code}) — the custom domain is not attached, or its ` +
-        `certificate is still provisioning. Skipping the smoke test.`,
+  if (matchesAny(err, NOT_PROVISIONED_ERROR_CODES)) {
+    return notLiveYet(
+      `${baseUrl} is not reachable yet (${errorLabel(err)}) — the custom domain is not ` +
+        `attached, its certificate is still provisioning, or only its AAAA record has propagated.`,
     );
-    return "skip";
   }
 
-  if (RETRYABLE_ERROR_CODES.has(code)) {
-    warning(
-      `Could not reach ${url} after ${MAX_ATTEMPTS} attempts (${describeError(err)}) — treating as a ` +
-        `transient network fault rather than a deployment failure.`,
-    );
-    return "skip";
+  if (matchesAny(err, RETRYABLE_ERROR_CODES)) {
+    return unreachable(`Could not reach ${url} after ${MAX_ATTEMPTS} attempts (${describeError(err)}).`);
   }
 
   error(`Request to ${url} failed: ${describeError(err)}`);
@@ -174,7 +274,7 @@ async function fetchWithRetry(url) {
     result = await attemptFetch(url);
 
     const retryable = result.err
-      ? RETRYABLE_ERROR_CODES.has(errorCode(result.err))
+      ? matchesAny(result.err, RETRYABLE_ERROR_CODES)
       : UPSTREAM_FLAKE_STATUSES.has(result.response.status);
     if (!retryable) return result;
 
@@ -199,11 +299,10 @@ async function checkHomePage() {
   if (err) return classifyNetworkError(err, url);
 
   if (NOT_PROVISIONED_STATUSES.has(response.status)) {
-    notice(
+    return notLiveYet(
       `${baseUrl} returned HTTP ${response.status} — DNS resolves to Cloudflare but no Worker is ` +
-        `bound to this hostname yet. Skipping the smoke test.`,
+        `bound to this hostname yet.`,
     );
-    return "skip";
   }
 
   if (response.status !== 200) {
@@ -275,11 +374,10 @@ async function checkProxyPath() {
   // Our own Worker's error responses (see lib/proxy.ts) are text/plain.
   if (contentType.startsWith("text/plain")) {
     if (body.startsWith("Upstream fetch failed:")) {
-      warning(
+      return upstreamOutage(
         `The Worker IS running on ${baseUrl} (it returned its own proxy error), but the upstream ` +
-          `${UPSTREAM_HOST} could not be reached: ${body.trim()}. Treating as an upstream outage, not a failure.`,
+          `${UPSTREAM_HOST} could not be reached: ${body.trim()}.`,
       );
-      return "skip";
     }
     if (body.startsWith("PROXY_ORIGIN is not configured")) {
       error(`The Worker is running but PROXY_ORIGIN is missing from the deployment: ${body.trim()}`);
@@ -288,11 +386,10 @@ async function checkProxyPath() {
   }
 
   if (UPSTREAM_FLAKE_STATUSES.has(response.status)) {
-    warning(
+    return upstreamOutage(
       `${PROXY_PATH} returned HTTP ${response.status} after ${MAX_ATTEMPTS} attempts — ` +
-        `${UPSTREAM_HOST} is congested or down. Treating as an upstream outage, not a failure.`,
+        `${UPSTREAM_HOST} is congested or down.`,
     );
-    return "skip";
   }
 
   // The asset layer answering here means the Worker never ran for this path.
@@ -332,7 +429,12 @@ async function checkProxyPath() {
 }
 
 async function main() {
-  console.log(`Smoke testing ${baseUrl}\n`);
+  console.log(`Smoke testing ${baseUrl}`);
+  console.log(
+    REQUIRE_LIVE
+      ? `SMOKE_REQUIRE_LIVE=1 — the domain must be live; only an ${UPSTREAM_HOST} outage may still pass.\n`
+      : `SMOKE_REQUIRE_LIVE is not set — a not-yet-live domain will skip instead of failing.\n`,
+  );
 
   const home = await checkHomePage();
   if (home === "fail") process.exit(1);
