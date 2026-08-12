@@ -1,12 +1,62 @@
+# Cloudflare Workers Static Assets configuration
+
 name = "zfb-example-reverse-proxy"
 main = "./dist/_worker.js"
 compatibility_date = "2026-05-01"
+# nodejs_compat is required by the CF adapter bundle at dist/_worker.js, which
+# imports node:async_hooks (AsyncLocalStorage). Without this flag wrangler
+# refuses to load the worker even when dist/_worker.js exists.
 compatibility_flags = ["nodejs_compat"]
 
+# Top-level fields (MUST stay above BOTH the [assets] and [vars] tables — in
+# TOML any key after a table header is scoped into that table; if these sit
+# under [assets] wrangler warns "Unexpected fields found in assets field" and
+# silently ignores them).
+#
+# workers_dev enables the worker's PUBLIC *.workers.dev subdomain
+# (zfb-example-reverse-proxy.takazudo.workers.dev). Kept on so the worker stays
+# reachable there while the custom domain below is being provisioned, and so the
+# preview URLs enabled underneath actually route — with workers_dev disabled the
+# edge rejects preview hostnames with "error code: 1042".
+workers_dev = true
+
+# preview_urls enables *.workers.dev version-preview URLs. It defaults to
+# *match* workers_dev, so leaving it implicit means a later `workers_dev = false`
+# would silently kill previews too. Always set it explicitly.
+preview_urls = true
+
+# ---------------------------------------------------------------------------
+# Static asset serving
+#
+# not_found_handling = "404-page" serves dist/404.html for unmatched GETs.
+#
+# run_worker_first = false consults the asset layer before the worker script;
+# the worker only runs when no matching asset is found. Correct for this repo —
+# the proxy lives under /proxy/..., which is never a built static asset, so it
+# still reaches the worker.
+#
+# dist/.assetsignore (written by `zfb build`, not committed) excludes
+# _worker.js and _zfb_inner.mjs from the public asset directory.
+# ---------------------------------------------------------------------------
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
+run_worker_first = false
 
+# PROXY_ORIGIN is public configuration, not a credential — it is deliberately
+# committed. Do NOT `wrangler secret put PROXY_ORIGIN`: a secret of the same
+# name shadows this var and makes the deployed behavior disagree with the repo.
 [vars]
 PROXY_ORIGIN = "https://httpbingo.org"
+
+# ---------------------------------------------------------------------------
+# Custom domain routing
+#
+# Requires the API token to carry Zone · Workers Routes · Edit on the
+# takazudomodular.com zone (see docs/cloudflare-setup.md step 1). Without it
+# `wrangler deploy` uploads the worker but fails when creating this route.
+# ---------------------------------------------------------------------------
+[[routes]]
+pattern = "zfb-example-reverse-proxy.takazudomodular.com"
+custom_domain = true

@@ -2,12 +2,14 @@
 
 An ordered, from-zero walkthrough that takes this repo from "never deployed" to
 a live Worker at
-`https://zfb-example-reverse-proxy.takazudo.workers.dev`.
+`https://zfb-example-reverse-proxy.takazudomodular.com`.
 
-**This repo is not deployed yet.** No Cloudflare secrets are set on it, and the
-`deploy` job in `.github/workflows/deploy.yml` self-skips until they are — so a
-green CI run here does not mean anything shipped. Everything below is the
-first-time path; follow it in order.
+**Read the preflight notice before trusting a green run.** The `deploy` job in
+`.github/workflows/deploy.yml` self-skips whenever `CLOUDFLARE_API_TOKEN` is
+unset, so a green CI run does not by itself mean anything shipped. The smoke
+test that follows no longer self-skips — it runs with `SMOKE_REQUIRE_LIVE: "1"`
+now that the domain is live — but it only runs at all once the deploy step did.
+Everything below is the first-time path; follow it in order.
 
 The README covers what the proxy *is* (route shape, header policy, local runs)
 and remains the reference for that. This document only covers getting it
@@ -47,12 +49,24 @@ Tokens → Create Custom Token, with these permissions:
 | --- | --- | --- |
 | Account | Workers Scripts | Edit |
 | Account | Account Settings | Read |
+| Zone | Workers Routes | Edit |
 
-Set **Account Resources → Include → (your account)**.
+Set **Account Resources → Include → (your account)** and **Zone Resources →
+Include → takazudomodular.com**.
 
-No Zone permissions are needed. This repo deploys to a `*.workers.dev` host,
-not a custom domain. Attaching a custom domain later would additionally require
-**Zone · Workers Routes · Edit** on the zone in question.
+The Zone permission is not optional here. This repo serves production on the
+custom domain declared in `wrangler.toml`:
+
+```toml
+[[routes]]
+pattern = "zfb-example-reverse-proxy.takazudomodular.com"
+custom_domain = true
+```
+
+`wrangler deploy` creates that route as the last step of a deploy. A token
+without **Zone · Workers Routes · Edit** uploads the Worker successfully and
+then fails on route creation, which reads as a red deploy even though the
+Worker itself deployed fine — see Troubleshooting.
 
 You also need the target **account id**, shown on the Cloudflare dashboard
 account home (or via `pnpm exec wrangler whoami`).
@@ -125,15 +139,32 @@ the only gate. Once it passes, the step runs `pnpm exec wrangler deploy`.
 The Worker is live at:
 
 ```
-https://zfb-example-reverse-proxy.takazudo.workers.dev
+https://zfb-example-reverse-proxy.takazudomodular.com
 ```
 
-Confirm the deploy step in the Actions run actually ran rather than emitting a
-skip notice, then exercise the proxy. These are the README's "Manual Wrangler
-checks" pointed at the deployed host instead of `wrangler dev`:
+The deploy job runs `pnpm smoke` (`scripts/smoke.mjs`) immediately after a
+successful deploy, which is the automated version of this section: it asserts
+the home page carries this site's content marker and that `/proxy/` returns a
+body that genuinely came from the upstream. Because this domain is live, the
+workflow sets `SMOKE_REQUIRE_LIVE: "1"` on that step, so a run that cannot reach
+the domain goes red instead of self-skipping with a `::notice::`. You can run
+the same check locally:
 
 ```sh
-BASE=https://zfb-example-reverse-proxy.takazudo.workers.dev
+pnpm smoke                      # skips if the domain is not live yet
+SMOKE_REQUIRE_LIVE=1 pnpm smoke # what CI runs
+```
+
+An `httpbingo.org` outage still degrades to a `::warning::` under the flag —
+see the README's smoke-test section for why those two tolerances are separate.
+
+To verify by hand, confirm the deploy step in the Actions run actually ran
+rather than emitting a skip notice, then exercise the proxy. These are the
+README's "Manual Wrangler checks" pointed at the deployed host instead of
+`wrangler dev`:
+
+```sh
+BASE=https://zfb-example-reverse-proxy.takazudomodular.com
 curl -i "$BASE/proxy/anything/reverse-proxy?via=zfb"
 curl -i "$BASE/proxy/redirect-to?url=/anything/redirect-target&status_code=302"
 curl -i "$BASE/proxy/cookies/set?zfb_proxy_cookie=demo"
@@ -167,6 +198,19 @@ wrong, expired, or under-scoped. Confirm it carries Workers Scripts · Edit and
 Account Settings · Read, that its Account Resources include the account whose
 id is in `CLOUDFLARE_ACCOUNT_ID`, and that the two secrets belong to the *same*
 account.
+
+**The deploy uploads the Worker and then fails creating the route.** The token
+is missing **Zone · Workers Routes · Edit** for `takazudomodular.com` (step 1).
+The Worker itself deployed — only the custom-domain attach failed, so the
+`*.workers.dev` host works while the custom domain does not resolve. Add the
+Zone permission to the token and re-run the deploy. Do **not** "fix" this by
+deleting the `[[routes]]` block from `wrangler.toml`; that would make the red
+go away by dropping the custom domain entirely.
+
+**The smoke test says the asset layer answered `/proxy/`.** The static assets
+are being served but the Worker script is not running for that path. Check that
+`main = "./dist/_worker.js"` still resolves after the build and that
+`run_worker_first` was not flipped to something that skips the worker.
 
 **The proxy returns upstream errors (502/504, or unexpected 4xx bodies).** The
 Worker deployed fine; the upstream leg is the problem. Check that
