@@ -30,9 +30,20 @@ on:
   pull_request:
     branches: [main]
 
+# PR builds may cancel each other freely, but a push-to-main run must never be
+# cancelled: it runs `wrangler deploy` and then smokes the live domain, and
+# interrupting that mid-flight leaves the Worker in an unknown/partial state.
+# Pushes to main therefore queue instead of pre-empting. Note this must live at
+# the WORKFLOW level: a workflow-level cancel kills the whole run, so a job-level
+# `cancel-in-progress: false` on `deploy` would not have shielded it.
+# The default `queue: single` keeps only ONE pending run per group, so a third
+# push displaces the still-pending one — nothing in flight is ever interrupted.
+# If every push must deploy, GitHub's `queue: max` does that, but it cannot be
+# combined with `cancel-in-progress: true`, so it would need the PR build and the
+# deploy split into two workflows.
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
