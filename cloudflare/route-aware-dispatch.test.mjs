@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createRouteAwareWorker } from "./route-aware-dispatch.ts";
+import { createRouteAwareWorker } from "./route-aware-dispatch.mjs";
 
 function recordingWorker() {
   const calls = [];

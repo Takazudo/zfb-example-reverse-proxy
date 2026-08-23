@@ -1,16 +1,16 @@
 const PROXY_ROUTE_PREFIX = "/proxy/";
 
-type AssetBinding = {
-  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-};
+/**
+ * @typedef {Record<string, unknown> & {
+ *   ASSETS?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> }
+ * }} WorkerEnv
+ */
 
-export type WorkerEnv = Record<string, unknown> & {
-  ASSETS?: AssetBinding;
-};
-
-export type WorkerHandler = {
-  fetch(request: Request, env: WorkerEnv, ctx: unknown): Promise<Response>;
-};
+/**
+ * @typedef {{
+ *   fetch(request: Request, env: WorkerEnv, ctx: unknown): Promise<Response>
+ * }} WorkerHandler
+ */
 
 /**
  * Preserve the adapter's generated dispatch behavior everywhere except the
@@ -18,8 +18,11 @@ export type WorkerHandler = {
  * to run this Worker first for /proxy/*; masking ASSETS here also prevents the
  * generated wrapper from probing the asset binding and canonicalizing encoded
  * slashes before zfb handles the request.
+ *
+ * @param {WorkerHandler} generatedWorker
+ * @returns {WorkerHandler}
  */
-export function createRouteAwareWorker(generatedWorker: WorkerHandler): WorkerHandler {
+export function createRouteAwareWorker(generatedWorker) {
   return {
     async fetch(request, env, ctx) {
       const pathname = new URL(request.url).pathname;
