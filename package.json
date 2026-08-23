@@ -8,6 +8,8 @@
     "build": "zfb build",
     "preview": "zfb preview",
     "typecheck": "zfb check",
+    "test": "node --test cloudflare/*.test.mjs",
+    "check:worker": "wrangler deploy --dry-run",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

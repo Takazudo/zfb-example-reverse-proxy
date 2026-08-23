@@ -7,12 +7,12 @@
  * the only check that confirms the Worker is actually serving
  * zfb-example-reverse-proxy.takazudomodular.com.
  *
- * Two assertions:
- *   1. GET /            -> 200 HTML carrying this site's content marker.
- *   2. GET /proxy/...   -> JSON that demonstrably came from the upstream origin
- *                          (httpbingo), not from the static asset layer. This is
- *                          the load-bearing one: it proves the Worker script ran
- *                          on the custom domain rather than a file being served.
+ * Three assertions:
+ *   1. GET /                  -> 200 HTML carrying this site's content marker.
+ *   2. GET /proxy/...         -> JSON that demonstrably came from the upstream
+ *                                origin (httpbingo), not the static asset layer.
+ *   3. GET /proxy/.../a%2Fb   -> the upstream echo still contains a%2Fb, proving
+ *                                neither Static Assets layer decoded the slash.
  *
  * EXIT POLICY — why this script exits 0 in cases that look like failures.
  * The house rule is that the repo never shows a red deploy for something that
@@ -57,7 +57,21 @@ const DEFAULT_BASE_URL = "https://zfb-example-reverse-proxy.takazudomodular.com"
 const CONTENT_MARKER = "Reverse proxy under /proxy/";
 
 // The catch-all SSR proxy route (pages/proxy/[...path].tsx -> lib/proxy.ts).
-const PROXY_PATH = "/proxy/anything/reverse-proxy?via=zfb";
+const PROXY_CHECKS = [
+  {
+    path: "/proxy/anything/reverse-proxy?via=zfb",
+    via: "zfb",
+    expectedUpstreamPathname: "/anything/reverse-proxy",
+    description: "the Worker is proxying on this domain",
+  },
+  {
+    path: "/proxy/anything/a%2Fb?via=encoded",
+    via: "encoded",
+    expectedUpstreamPathname: "/anything/a%2Fb",
+    requireNoRedirect: true,
+    description: "the encoded slash reached the upstream unchanged",
+  },
+];
 const UPSTREAM_HOST = "httpbingo.org";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -330,10 +344,10 @@ async function checkHomePage() {
  * Assertion 2: the proxy really proxies.
  *
  * httpbingo's /anything echo returns query args as ARRAYS of strings (verified
- * against the live upstream), so `args.via === ["zfb"]` plus the echoed
+ * against the live upstream), so the expected `args.via` value plus the echoed
  * httpbingo URL is something the static asset layer could never produce.
  */
-function upstreamShapeProblems(json) {
+function upstreamShapeProblems(json, check) {
   if (json === null || typeof json !== "object" || Array.isArray(json)) {
     return ["response body is not a JSON object"];
   }
@@ -344,29 +358,42 @@ function upstreamShapeProblems(json) {
   }
 
   const via = json.args?.via;
-  if (!Array.isArray(via) || !via.includes("zfb")) {
-    problems.push(`expected args.via to be an array containing "zfb", got ${JSON.stringify(via)}`);
+  if (!Array.isArray(via) || !via.includes(check.via)) {
+    problems.push(
+      `expected args.via to be an array containing ${JSON.stringify(check.via)}, got ${JSON.stringify(via)}`,
+    );
   }
 
-  let echoedHost;
+  let echoedUrl;
   try {
-    echoedHost = new URL(json.url).host;
+    echoedUrl = new URL(json.url);
   } catch {
-    echoedHost = undefined;
+    echoedUrl = undefined;
   }
-  if (echoedHost !== UPSTREAM_HOST) {
+  if (echoedUrl?.host !== UPSTREAM_HOST) {
     problems.push(`expected the echoed url host to be ${UPSTREAM_HOST}, got ${JSON.stringify(json.url)}`);
+  }
+  if (echoedUrl?.pathname !== check.expectedUpstreamPathname) {
+    problems.push(
+      `expected the echoed pathname to be ${JSON.stringify(check.expectedUpstreamPathname)}, ` +
+        `got ${JSON.stringify(echoedUrl?.pathname)}`,
+    );
   }
 
   return problems;
 }
 
-async function checkProxyPath() {
-  const url = `${baseUrl}${PROXY_PATH}`;
+async function checkProxyPath(check) {
+  const url = `${baseUrl}${check.path}`;
   console.log(`GET ${url}`);
   const { response, err } = await fetchWithRetry(url);
 
   if (err) return classifyNetworkError(err, url);
+
+  if (check.requireNoRedirect && response.redirected) {
+    error(`${check.path} redirected to ${response.url}; the encoded proxy path must be handled directly.`);
+    return "fail";
+  }
 
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
@@ -387,7 +414,7 @@ async function checkProxyPath() {
 
   if (UPSTREAM_FLAKE_STATUSES.has(response.status)) {
     return upstreamOutage(
-      `${PROXY_PATH} returned HTTP ${response.status} after ${MAX_ATTEMPTS} attempts — ` +
+      `${check.path} returned HTTP ${response.status} after ${MAX_ATTEMPTS} attempts — ` +
         `${UPSTREAM_HOST} is congested or down.`,
     );
   }
@@ -395,18 +422,18 @@ async function checkProxyPath() {
   // The asset layer answering here means the Worker never ran for this path.
   if (response.status === 404 || contentType.includes("text/html")) {
     error(
-      `${PROXY_PATH} returned HTTP ${response.status} ${contentType} — the static asset layer answered ` +
+      `${check.path} returned HTTP ${response.status} ${contentType} — the static asset layer answered ` +
         `instead of the Worker running the proxy route.`,
     );
     return "fail";
   }
 
   if (response.status !== 200) {
-    error(`${PROXY_PATH} returned HTTP ${response.status}, expected 200.`);
+    error(`${check.path} returned HTTP ${response.status}, expected 200.`);
     return "fail";
   }
   if (!contentType.includes("application/json")) {
-    error(`${PROXY_PATH} returned content-type "${contentType}", expected application/json.`);
+    error(`${check.path} returned content-type "${contentType}", expected application/json.`);
     return "fail";
   }
 
@@ -414,17 +441,17 @@ async function checkProxyPath() {
   try {
     json = JSON.parse(body);
   } catch {
-    error(`${PROXY_PATH} returned 200 application/json but the body did not parse as JSON.`);
+    error(`${check.path} returned 200 application/json but the body did not parse as JSON.`);
     return "fail";
   }
 
-  const problems = upstreamShapeProblems(json);
+  const problems = upstreamShapeProblems(json, check);
   if (problems.length > 0) {
-    error(`${PROXY_PATH} returned 200 JSON that did not come from ${UPSTREAM_HOST}: ${problems.join("; ")}`);
+    error(`${check.path} returned unexpected upstream JSON: ${problems.join("; ")}`);
     return "fail";
   }
 
-  console.log(`  ok — 200 JSON echoed by ${UPSTREAM_HOST}; the Worker is proxying on this domain`);
+  console.log(`  ok — 200 JSON echoed by ${UPSTREAM_HOST}; ${check.description}`);
   return "pass";
 }
 
@@ -440,9 +467,11 @@ async function main() {
   if (home === "fail") process.exit(1);
   if (home === "skip") process.exit(0);
 
-  const proxy = await checkProxyPath();
-  if (proxy === "fail") process.exit(1);
-  if (proxy === "skip") process.exit(0);
+  for (const check of PROXY_CHECKS) {
+    const proxy = await checkProxyPath(check);
+    if (proxy === "fail") process.exit(1);
+    if (proxy === "skip") process.exit(0);
+  }
 
   console.log(`\nSmoke test passed — ${baseUrl} serves this site and proxies to ${UPSTREAM_HOST}.`);
 }

@@ -1,7 +1,10 @@
 # Cloudflare Workers Static Assets configuration
 
 name = "zfb-example-reverse-proxy"
-main = "./dist/_worker.js"
+# This route-aware entrypoint delegates to the adapter-generated
+# dist/_worker.js. It masks the ASSETS binding only for /proxy/* so encoded
+# path segments reach the SSR route without an asset-binding canonicalization.
+main = "./cloudflare/worker-entry.mjs"
 compatibility_date = "2026-05-01"
 # nodejs_compat is required by the CF adapter bundle at dist/_worker.js, which
 # imports node:async_hooks (AsyncLocalStorage). Without this flag wrangler
@@ -30,10 +33,10 @@ preview_urls = true
 #
 # not_found_handling = "404-page" serves dist/404.html for unmatched GETs.
 #
-# run_worker_first = false consults the asset layer before the worker script;
-# the worker only runs when no matching asset is found. Correct for this repo —
-# the proxy lives under /proxy/..., which is never a built static asset, so it
-# still reaches the worker.
+# Selective Worker-first routing keeps ordinary files asset-first, but sends
+# /proxy/* to cloudflare/worker-entry.mjs before Static Assets can canonicalize
+# an encoded slash such as %2F into a literal path separator. The entrypoint
+# then bypasses the generated wrapper's own ASSETS probe for that route only.
 #
 # dist/.assetsignore (written by `zfb build`, not committed) excludes
 # _worker.js and _zfb_inner.mjs from the public asset directory.
@@ -42,7 +45,7 @@ preview_urls = true
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
-run_worker_first = false
+run_worker_first = ["/proxy/*"]
 
 # PROXY_ORIGIN is public configuration, not a credential — it is deliberately
 # committed. Do NOT `wrangler secret put PROXY_ORIGIN`: a secret of the same
