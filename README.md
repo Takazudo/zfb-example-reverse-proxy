@@ -47,6 +47,14 @@ The catch-all route receives the path remainder after `/proxy/`. The helper
 derives the upstream URL from the original request URL so percent-encoded path
 segments and the query string are preserved exactly when forwarding.
 
+Cloudflare Static Assets normally canonicalizes encoded slashes before a
+dynamic route sees them. This example therefore uses selective Worker-first
+routing for `/proxy/*` and a small route-aware entrypoint at
+`cloudflare/worker-entry.mjs`. The entrypoint delegates to the current
+adapter-generated Worker, masking its `ASSETS` binding only for proxy requests.
+Ordinary files remain asset-first, and unmatched non-proxy requests still use
+the adapter's styled-404 fallback.
+
 ## Header policy
 
 `lib/proxy.ts` strips hop-by-hop headers on both sides:
@@ -110,6 +118,7 @@ In another shell:
 
 ```sh
 curl -i "http://127.0.0.1:8788/proxy/anything/reverse-proxy?via=zfb"
+curl --path-as-is -i "http://127.0.0.1:8788/proxy/anything/a%2Fb?via=encoded"
 curl -i "http://127.0.0.1:8788/proxy/redirect-to?url=/anything/redirect-target&status_code=302"
 curl -i "http://127.0.0.1:8788/proxy/cookies/set?zfb_proxy_cookie=demo"
 curl -i "http://127.0.0.1:8788/proxy/response-headers?Content-Security-Policy=default-src%20%27self%27&Strict-Transport-Security=max-age%3D31536000&X-Demo=kept"
@@ -118,6 +127,8 @@ curl -i "http://127.0.0.1:8788/proxy/response-headers?Content-Security-Policy=de
 Expected checks:
 
 - `/anything/...` returns upstream JSON without buffering the body.
+- `/anything/a%2Fb` is echoed with `%2F` intact rather than redirected to
+  `/anything/a/b`.
 - `/redirect-to...` returns `Location: /proxy/anything/redirect-target`.
 - `/cookies/set...` does not return `Set-Cookie`.
 - `/response-headers...` keeps `X-Demo: kept` and strips CSP and HSTS.
@@ -142,11 +153,13 @@ No extra Cloudflare resources are required. After `pnpm build`, deploy with:
 pnpm exec wrangler deploy
 ```
 
-To validate `wrangler.toml` without credentials — including that the top-level
-keys are not accidentally scoped into `[assets]` — use:
+To validate the route-aware entrypoint and `wrangler.toml` without credentials
+— including that the top-level keys are not accidentally scoped into
+`[assets]` — use:
 
 ```sh
-pnpm exec wrangler deploy --dry-run
+pnpm build
+pnpm check:worker
 ```
 
 A misplaced key does not fail the command; it prints
@@ -160,8 +173,9 @@ For an ordered, from-zero walkthrough of wiring this repo up to Cloudflare, see
 
 This repo ships `.github/workflows/deploy.yml`:
 
-- **build** runs on every push and PR — `pnpm install`, `pnpm typecheck`,
-  `pnpm build`. It needs no Cloudflare credentials, so CI is green immediately.
+- **build** runs on every push and PR — install, typecheck, route-aware dispatch
+  tests, `pnpm build`, and a Wrangler dry-run. It needs no Cloudflare
+  credentials, so CI is green immediately.
 - **deploy** runs on push to `main` and calls `wrangler deploy`. It self-skips
   until the secrets below are set, so a fresh repo never shows a red deploy.
 - **smoke test** runs after a successful deploy — `pnpm smoke`, which is
@@ -180,13 +194,16 @@ No secrets or resource ids to provision; `PROXY_ORIGIN` is a public `[vars]` val
 
 `wrangler deploy` exiting 0 says the Worker uploaded — it says nothing about
 whether the custom domain actually routes to it. `scripts/smoke.mjs` is the
-check that confirms it, and it asserts two things against the live host:
+check that confirms it, and it asserts three things against the live host:
 
 1. `GET /` returns 200 HTML containing this site's content marker.
 2. `GET /proxy/anything/reverse-proxy?via=zfb` returns JSON that demonstrably
    came from `httpbingo.org` — the echoed `method`, `args.via`, and upstream
    `url`. This is the load-bearing assertion: the static asset layer could
    never produce that body, so it proves the Worker itself ran on the domain.
+3. `GET /proxy/anything/a%2Fb?via=encoded` reaches the upstream without a
+   redirect and the echoed URL still contains `/anything/a%2Fb`, guarding the
+   selective Worker-first and route-aware dispatch behavior.
 
 Run it by hand against any host:
 

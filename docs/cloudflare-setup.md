@@ -128,11 +128,12 @@ either:
   gh run rerun <run-id> --repo Takazudo/zfb-example-reverse-proxy
   ```
 
-The run has two jobs. `build` (typecheck + `zfb build`) needs no credentials
-and has been green all along. `deploy` then runs a preflight that skips the
-deploy unless `CLOUDFLARE_API_TOKEN` is set and `wrangler.toml` holds no
-`REPLACE_WITH_*` placeholder — this repo has no placeholder, so the token is
-the only gate. Once it passes, the step runs `pnpm exec wrangler deploy`.
+The run has two jobs. The `build` job needs no credentials and runs typecheck,
+route-aware dispatch tests, `zfb build`, and a Wrangler dry-run. `deploy` then
+runs a preflight that skips the deploy unless `CLOUDFLARE_API_TOKEN` is set and
+`wrangler.toml` holds no `REPLACE_WITH_*` placeholder — this repo has no
+placeholder, so the token is the only gate. Once it passes, the step runs
+`pnpm exec wrangler deploy`.
 
 ## 5. Verify the deployment
 
@@ -166,6 +167,7 @@ README's "Manual Wrangler checks" pointed at the deployed host instead of
 ```sh
 BASE=https://zfb-example-reverse-proxy.takazudomodular.com
 curl -i "$BASE/proxy/anything/reverse-proxy?via=zfb"
+curl --path-as-is -i "$BASE/proxy/anything/a%2Fb?via=encoded"
 curl -i "$BASE/proxy/redirect-to?url=/anything/redirect-target&status_code=302"
 curl -i "$BASE/proxy/cookies/set?zfb_proxy_cookie=demo"
 curl -i "$BASE/proxy/response-headers?Content-Security-Policy=default-src%20%27self%27&Strict-Transport-Security=max-age%3D31536000&X-Demo=kept"
@@ -176,6 +178,8 @@ Expected, matching the header policy the README documents:
 - `/` serves the static index page from the built assets.
 - `/proxy/anything/...` returns upstream JSON with the forwarded method, URL,
   and query preserved.
+- `/proxy/anything/a%2Fb...` returns upstream JSON whose echoed URL still
+  contains `/anything/a%2Fb`; a redirect to `/anything/a/b` is a regression.
 - `/proxy/redirect-to...` returns `Location: /proxy/anything/redirect-target` —
   the same-origin target rewritten back under `/proxy/`.
 - `/proxy/cookies/set...` does **not** return `Set-Cookie`.
@@ -207,10 +211,11 @@ Zone permission to the token and re-run the deploy. Do **not** "fix" this by
 deleting the `[[routes]]` block from `wrangler.toml`; that would make the red
 go away by dropping the custom domain entirely.
 
-**The smoke test says the asset layer answered `/proxy/`.** The static assets
-are being served but the Worker script is not running for that path. Check that
-`main = "./dist/_worker.js"` still resolves after the build and that
-`run_worker_first` was not flipped to something that skips the worker.
+**The smoke test says the asset layer answered `/proxy/`, or `%2F` became `/`.**
+Check that `main = "./cloudflare/worker-entry.mjs"`, that `pnpm build` generated
+`dist/_worker.js`, and that `[assets] run_worker_first = ["/proxy/*"]` remains
+configured. Run `pnpm check:worker` after the build to validate the complete
+Worker bundle without deploying it.
 
 **The proxy returns upstream errors (502/504, or unexpected 4xx bodies).** The
 Worker deployed fine; the upstream leg is the problem. Check that

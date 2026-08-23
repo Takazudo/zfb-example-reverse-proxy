@@ -1,8 +1,8 @@
 # Cloudflare Workers (static assets) deploy for this zfb example.
 #
-#   build  — always runs (push + PR): install, typecheck (`zfb check`), build
-#            (`zfb build`). This is the L3 build-output gate; it needs no
-#            Cloudflare credentials, so a fresh clone/fork is green immediately.
+#   build  — always runs (push + PR): install, typecheck, dispatch tests, zfb
+#            build, and a Wrangler dry-run. This is the L3 build-output gate; it
+#            needs no Cloudflare credentials, so a fresh clone/fork is green.
 #   deploy — push to `main` only: runs `wrangler deploy`, but SELF-SKIPS when
 #              * secrets.CLOUDFLARE_API_TOKEN is unset, or
 #              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   build:
-    name: Build (typecheck + zfb build)
+    name: Build, test, and validate Worker
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -67,8 +67,12 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm typecheck
+      - name: Test route-aware Worker dispatch
+        run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Validate Worker bundle and configuration
+        run: pnpm check:worker
 
   deploy:
     name: Deploy to Cloudflare Workers
