@@ -8,13 +8,7 @@ type Env = {
   PROXY_ORIGIN?: string;
 };
 
-type ProxyPageProps = {
-  params: {
-    path?: string | string[];
-  };
-};
-
-export default async function ProxyPage(_props: ProxyPageProps) {
+export default async function ProxyPage() {
   const { env, request } = getCloudflareContext<Env>();
   return proxyRequest({
     request,
