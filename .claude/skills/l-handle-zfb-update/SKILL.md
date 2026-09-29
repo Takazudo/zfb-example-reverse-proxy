@@ -8,7 +8,7 @@ description: >-
   update', or 'handle zfb update', (2) A new zfb release is out and this
   example should track it.
 user-invocable: true
-argument-hint: "[target-version, e.g. 2.3.0 — omit to use latest stable]"
+argument-hint: "[target-version, e.g. 3.0.1 — omit to use latest stable]"
 ---
 
 # Handle zfb Update — reverse-proxy
@@ -46,6 +46,11 @@ TARGET=${1:-$(npm view @takazudo/zfb dist-tags.latest)}
 - If `CURRENT` == `TARGET`: report "already at the latest stable (<version>)" and STOP.
 - If an explicit target is older than `CURRENT`, that is a downgrade — stop and
   confirm first.
+- The floor is **3.0.0**: this repo was migrated to the zfb 3 contracts
+  (zudo-react JSX, zudo-wind reset) and never goes back to the 2.x line.
+- **A major bump (e.g. 3.x → 4.0.0) is a migration, not a version edit.** Read
+  the upstream migration guide for that major, treat every row in the Step 2
+  table as flagged, and run the full major-bump verification in Step 5.
 
 ## Step 2 — Review upstream changes BEFORE bumping
 
@@ -82,11 +87,12 @@ Flag anything that touches a surface this example uses:
 
 | Upstream surface | Where this project uses it |
 | --- | --- |
-| `defineConfig` schema | `zfb.config.ts` — framework / adapter / tailwind settings |
+| `defineConfig` schema | `zfb.config.ts` — `adapter` + `wind: { spec: 1, reset: "owned-v1" }` (no `framework`/`tailwind` keys since 3.0.0) |
+| zudo-react JSX runtime (`@takazudo/zfb/zudo-react`) | `tsconfig.json` `jsxImportSource`, `pages/*.tsx` (HTML attribute spellings: `charset`, `class`; `key` on mapped intrinsics) |
 | Cloudflare adapter + `getCloudflareContext()` (`env.PROXY_ORIGIN`) | `lib/proxy.ts`, `pages/proxy/[...path].tsx` |
 | SSR route contract (`export const prerender = false`) | `pages/proxy/[...path].tsx` |
 | Catch-all dynamic route (`[...path]`) | `pages/proxy/[...path].tsx` |
-| Tailwind / CSS pipeline | `styles/global.css` |
+| zudo-wind reset + CSS pipeline | `styles/global.css` — authored CSS only, no utilities; its preflight-parity block (tap highlight, monospace stack) exists because `owned-v1` ≠ Tailwind preflight (zudo-front-builder#3382) |
 | CLI (`zfb dev/build/preview/check`) | `package.json` scripts, `wrangler.toml` |
 
 Rule: adapt only if this project actually uses the changed feature. Internal zfb
@@ -119,9 +125,47 @@ pnpm build       # pages build cleanly, adapter writes dist/_worker.js + dist/.a
 pnpm typecheck   # zfb check passes
 ```
 
+Also run `pnpm test` (route-aware dispatch) and `pnpm check:worker` (Wrangler
+dry-run — inspect its warnings, not only the exit code; a mis-scoped TOML key is
+silently ignored with a warning).
+
 `zfb dev` renders the static index but does not read `env.PROXY_ORIGIN`; check the
 proxy path with `pnpm build` then `pnpm exec wrangler dev` and the manual Wrangler
-checks in the README.
+checks in the README. Always pass an explicit free `--port` and `--inspector-port`
+(other sessions may hold the defaults) and kill the server afterwards.
+
+Smoke only with an explicit local URL: `pnpm smoke http://127.0.0.1:<port>`. The
+default target is the live production domain — never smoke it by hand. "Smoke
+test passed" is a pass; a `::warning::` httpbingo skip is not.
+
+### Major-bump verification (runtime or CSS engine changes)
+
+Compare against the previous version side by side, not from memory:
+
+1. `git worktree add <scratch>/old <base-sha> --detach`, then install and build
+   there. Diff the `dist` file sets (`_worker.js`, `_zfb_inner.mjs`,
+   `.assetsignore`, `404.html` must all still exist) and the HTML: it should
+   differ only in the stylesheet hash.
+2. Run both Workers with `wrangler dev` against a **controlled local upstream**
+   (`--var PROXY_ORIGIN:http://127.0.0.1:<port>`), then diff an HTTP matrix of
+   the two. The matrix covers:
+   - methods and bodies, HEAD, and redirect rewriting (same-origin, relative,
+     cross-origin);
+   - response-header policy stripping and request-header filtering;
+   - encoded paths via `curl --path-as-is` (`a%2Fb`);
+   - upstream 404/500 passthrough (these must not become the styled 404);
+   - plain vs `sec-fetch-mode: navigate`;
+   - streaming in both directions (delayed chunks);
+   - `/`, the CSS bytes, the styled 404, and `/proxy`, `/proxy/`,
+     `/proxy-not-a-route`.
+
+   Also point a Worker at a dead port to check the 502. The 2.15→3.0.0 migration
+   kept its tools under the cclogs dir `zfb-example-reverse-proxy/v3-migration/tools/`
+   (`upstream.mjs`, `matrix.mjs`, `visual.mjs`).
+3. In the browser (Chromium + WebKit), compare old vs new pixels and per-element
+   computed styles on `/` and the 404 page. Use widths on both sides of the
+   720px breakpoint (375/700/740/1280). A reset change only shows up in the
+   computed-style diff: macOS fonts can hide a font-stack change in screenshots.
 
 ## Step 6 — Report
 
