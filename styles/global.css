@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 :root {
   color-scheme: light;
   --bg: #f7f8f5;
@@ -22,6 +20,18 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Parity with the Tailwind v4 preflight that zfb 2.x supplied: the owned-v1 reset drops the tap
+   highlight reset and shortens the monospace stack (Takazudo/zudo-front-builder#3382). */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+code {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
 }
 
 body {

@@ -90,6 +90,24 @@ still respecting origin cache headers. The cache is shared at the edge, so do
 not use this setting for user-specific responses without adding a stricter
 cache policy.
 
+## zfb 3 setup
+
+This example runs on the zfb 3 package family (`@takazudo/zfb`,
+`@takazudo/zfb-runtime`, and `@takazudo/zfb-adapter-cloudflare`, pinned to one
+exact version):
+
+- **JSX:** pages compile with zfb's owned `zudo-react` runtime
+  (`jsxImportSource: "@takazudo/zfb/zudo-react"`); there is no Preact dependency.
+  Intrinsic elements use HTML attribute spellings (`charset`, `class`).
+- **CSS:** `styles/global.css` is plain authored CSS. `zfb.config.ts` enables
+  zudo-wind only for its reset (`wind: { spec: 1, reset: "owned-v1" }`); no
+  utility classes or tokens are used. A small parity block restores the two
+  Tailwind-preflight details the zfb 2.x build relied on (tap highlight and the
+  full monospace stack).
+- **Routing:** the proxy route still returns a raw `Response`, and
+  `cloudflare/worker-entry.mjs` still wraps the adapter's generated
+  `dist/_worker.js`. Neither changed with the major upgrade.
+
 ## Local run
 
 In this repo:

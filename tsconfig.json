@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "preact",
+    "jsxImportSource": "@takazudo/zfb/zudo-react",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
