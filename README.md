@@ -90,9 +90,9 @@ still respecting origin cache headers. The cache is shared at the edge, so do
 not use this setting for user-specific responses without adding a stricter
 cache policy.
 
-## zfb 3 setup
+## zfb 4 setup
 
-This example runs on the zfb 3 package family (`@takazudo/zfb`,
+This example runs on the zfb 4.3.0 package family (`@takazudo/zfb`,
 `@takazudo/zfb-runtime`, and `@takazudo/zfb-adapter-cloudflare`, pinned to one
 exact version):
 
@@ -122,6 +122,15 @@ pnpm preview
 `pnpm dev` is useful for the static index page. Because the proxy reads
 Cloudflare `env.PROXY_ORIGIN`, use `pnpm preview` or direct Wrangler dev after
 building when checking the SSR proxy path.
+
+## Automated local proxy checks
+
+After `pnpm build`, run `pnpm test:local` (requires `curl`). It starts Wrangler
+with `--local` on free loopback ports and overrides `PROXY_ORIGIN` with a local
+mock. It checks routing, encoded paths, methods/bodies, header policy, redirects,
+upstream statuses, streaming in both directions, and a dead upstream's 502.
+It also verifies static CSS and the styled 404, then stops both servers. The
+same command runs in CI without Cloudflare credentials or third-party requests.
 
 ## Manual Wrangler checks
 
@@ -192,7 +201,7 @@ For an ordered, from-zero walkthrough of wiring this repo up to Cloudflare, see
 This repo ships `.github/workflows/deploy.yml`:
 
 - **build** runs on every push and PR — install, typecheck, route-aware dispatch
-  tests, `pnpm build`, and a Wrangler dry-run. It needs no Cloudflare
+  tests, `pnpm build`, the local mock-upstream matrix, and a Wrangler dry-run. It needs no Cloudflare
   credentials, so CI is green immediately.
 - **deploy** runs on push to `main` and calls `wrangler deploy`. It self-skips
   until the secrets below are set, so a fresh repo never shows a red deploy.

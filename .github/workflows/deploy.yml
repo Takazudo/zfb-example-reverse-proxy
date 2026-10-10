@@ -71,6 +71,8 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Test Worker against local mock upstream
+        run: pnpm test:local
       - name: Validate Worker bundle and configuration
         run: pnpm check:worker
 
