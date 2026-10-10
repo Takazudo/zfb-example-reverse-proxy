@@ -10,12 +10,13 @@
     "typecheck": "zfb check",
     "test": "node --test cloudflare/*.test.mjs",
     "check:worker": "wrangler deploy --dry-run",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test:local": "node scripts/test-local.mjs"
   },
   "dependencies": {
-    "@takazudo/zfb": "3.1.0",
-    "@takazudo/zfb-adapter-cloudflare": "3.1.0",
-    "@takazudo/zfb-runtime": "3.1.0"
+    "@takazudo/zfb": "4.3.0",
+    "@takazudo/zfb-adapter-cloudflare": "4.3.0",
+    "@takazudo/zfb-runtime": "4.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
