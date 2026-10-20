@@ -92,7 +92,7 @@ cache policy.
 
 ## zfb 4 setup
 
-This example runs on the zfb 4.3.0 package family (`@takazudo/zfb`,
+This example runs on the zfb 4.5.4 package family (`@takazudo/zfb`,
 `@takazudo/zfb-runtime`, and `@takazudo/zfb-adapter-cloudflare`, pinned to one
 exact version):
 
