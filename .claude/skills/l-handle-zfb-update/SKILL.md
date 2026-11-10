@@ -48,6 +48,10 @@ TARGET=${1:-$(npm view @takazudo/zfb dist-tags.latest)}
   confirm first.
 - The floor is **3.0.0**: this repo was migrated to the zfb 3 contracts
   (zudo-react JSX, zudo-wind reset) and never goes back to the 2.x line.
+- Since **5.0.0** the packages require Node.js >= 24 (`engines.node`). Keep
+  this repo's `engines` and CI (`node-version: 24`) on that floor. zfb 6
+  removes `ZFB_BUNDLER`, `ZFB_ROLLDOWN_PROTOTYPE`, and `ZFB_ESBUILD_BIN`; this
+  example does not set them.
 - **A major bump (e.g. 3.x → 4.0.0) is a migration, not a version edit.** Read
   the upstream migration guide for that major, treat every row in the Step 2
   table as flagged, and run the full major-bump verification in Step 5.
