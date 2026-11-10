@@ -90,12 +90,17 @@ still respecting origin cache headers. The cache is shared at the edge, so do
 not use this setting for user-specific responses without adding a stricter
 cache policy.
 
-## zfb 4 setup
+## zfb 6 setup
 
-This example runs on the zfb 4.7.0 package family (`@takazudo/zfb`,
+This example runs on the zfb 6.0.1 package family (`@takazudo/zfb`,
 `@takazudo/zfb-runtime`, and `@takazudo/zfb-adapter-cloudflare`, pinned to one
 exact version):
 
+- **Node.js:** 24 or newer. zfb 5.0.0 raised `engines.node` to `>=24.0.0`
+  (`package.json` `engines` and CI both use that floor).
+- **Bundler:** zfb 6 always bundles with the embedded Rolldown bundler. This
+  example does not set `ZFB_BUNDLER`, `ZFB_ROLLDOWN_PROTOTYPE`, or
+  `ZFB_ESBUILD_BIN`.
 - **JSX:** pages compile with zfb's owned `zudo-react` runtime
   (`jsxImportSource: "@takazudo/zfb/zudo-react"`); there is no Preact dependency.
   Intrinsic elements use HTML attribute spellings (`charset`, `class`).
@@ -106,7 +111,9 @@ exact version):
   full monospace stack).
 - **Routing:** the proxy route still returns a raw `Response`, and
   `cloudflare/worker-entry.mjs` still wraps the adapter's generated
-  `dist/_worker.js`. Neither changed with the major upgrade.
+  `dist/_worker.js`. The published adapter and `defineConfig` types are
+  unchanged from 4.7.0; the 5.0 and 6.0 breaks are the Node floor and the
+  removal of the esbuild backend.
 
 ## Local run
 
