@@ -90,15 +90,15 @@ still respecting origin cache headers. The cache is shared at the edge, so do
 not use this setting for user-specific responses without adding a stricter
 cache policy.
 
-## zfb 6 setup
+## zfb 7 setup
 
-This example runs on the zfb 6.0.1 package family (`@takazudo/zfb`,
+This example runs on the zfb 7.2.0 package family (`@takazudo/zfb`,
 `@takazudo/zfb-runtime`, and `@takazudo/zfb-adapter-cloudflare`, pinned to one
 exact version):
 
 - **Node.js:** 24 or newer. zfb 5.0.0 raised `engines.node` to `>=24.0.0`
   (`package.json` `engines` and CI both use that floor).
-- **Bundler:** zfb 6 always bundles with the embedded Rolldown bundler. This
+- **Bundler:** zfb 6 and 7 bundle with the embedded Rolldown bundler. This
   example does not set `ZFB_BUNDLER`, `ZFB_ROLLDOWN_PROTOTYPE`, or
   `ZFB_ESBUILD_BIN`.
 - **JSX:** pages compile with zfb's owned `zudo-react` runtime
@@ -111,9 +111,11 @@ exact version):
   full monospace stack).
 - **Routing:** the proxy route still returns a raw `Response`, and
   `cloudflare/worker-entry.mjs` still wraps the adapter's generated
-  `dist/_worker.js`. The published adapter and `defineConfig` types are
-  unchanged from 4.7.0; the 5.0 and 6.0 breaks are the Node floor and the
-  removal of the esbuild backend.
+  `dist/_worker.js`. The `defineConfig` fields this example sets (`adapter`,
+  `wind.spec`, `wind.reset`) and `getCloudflareContext()` are unchanged from
+  6.0.1. 7.0.0 suspended the Linux arm64 npm CLI carrier and 7.1.0 published
+  it again. This example does not set `trailingSlash`, so 7.2.0's dev-only
+  trailing-slash dispatch does not apply to the built Worker.
 
 ## Local run
 
